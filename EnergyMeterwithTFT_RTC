@@ -1,0 +1,389 @@
+/*
+ * ARCHIVO: Monitorización DDS238-1
+ *   AUTOR: David Losada
+ *   FECHA: 25/11/2015
+ *     URL: http://miqueridopinwino.blogspot.com
+ *
+ * OBJETIVO: Prototipo para comprobar consumos s/horarios
+ * Cálculo TDH en invierno; en verano es 13 a 23h http://nergiza.com/tarifa-nocturna-sigue-existiendo-es-rentable/
+ *
+ * Este medidor de KWh da un pulso cada Vatio/h.
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * version 2 as published by the Free Software Foundation.
+ */
+
+// IMPORTANT: Adafruit_TFTLCD LIBRARY MUST BE SPECIFICALLY
+// CONFIGURED FOR EITHER THE TFT SHIELD OR THE BREAKOUT BOARD.
+// SEE RELEVANT COMMENTS IN Adafruit_TFTLCD.h FOR SETUP.
+
+#include <Adafruit_GFX.h>    // Core graphics library
+#include <Adafruit_TFTLCD.h> // Hardware-specific library
+#include <EEPROM.h> //Para usar la memoria EEPROM
+//Arduino con Tiny RTC I2C http://zygzax.com
+#include <Wire.h>
+#include <DS1307RTC.h>
+#include <Time.h> //Manejo reloj interno Arduino
+
+// The control pins for the LCD can be assigned to any digital or
+// analog pins...but we'll use the analog pins as this allows us to
+// double up the pins with the touch screen (see the TFT paint example).
+#define LCD_CS A3 // Chip Select goes to Analog 3
+#define LCD_CD A2 // Command/Data goes to Analog 2
+#define LCD_WR A1 // LCD Write goes to Analog 1
+#define LCD_RD A0 // LCD Read goes to Analog 0
+
+#define LCD_RESET A4 // Can alternately just connect to Arduino's reset pin
+
+// When using the BREAKOUT BOARD only, use these 8 data lines to the LCD:
+// For the Arduino Uno, Duemilanove, Diecimila, etc.:
+//   D0 connects to digital pin 8  (Notice these are
+//   D1 connects to digital pin 9   NOT in order!)
+//   D2 connects to digital pin 2
+//   D3 connects to digital pin 3
+//   D4 connects to digital pin 4
+//   D5 connects to digital pin 5
+//   D6 connects to digital pin 6
+//   D7 connects to digital pin 7
+// For the Arduino Mega, use digital pins 22 through 29
+// (on the 2-row header at the end of the board).
+
+// Assign human-readable names to some common 16-bit color values:
+#define	BLACK   0x0000
+#define	BLUE    0x001F
+#define	RED     0xF800
+#define	GREEN   0x07E0
+#define CYAN    0x07FF
+#define MAGENTA 0xF81F
+#define YELLOW  0xFFE0
+#define WHITE   0xFFFF
+
+Adafruit_TFTLCD tft(LCD_CS, LCD_CD, LCD_WR, LCD_RD, LCD_RESET);
+// If using the shield, all control and data lines are fixed, and
+// a simpler declaration can optionally be used:
+// Adafruit_TFTLCD tft;
+
+int PowerSensor = 0; //pin de entrada de pulsos medidor eléctrico
+float PulsosKW = 1000; //IMPORTANTE DEFINIR AQUÍ los que correspondan a tu aparato; pulsos por KW
+//(Con un sensor de 1000 máximo vamos a tener 5 pulsos/seg. para un consumo de 5.000W)
+//Es decir, van a pasar mínimo 170 milisegundos entre pulsos (200-30 que dura)
+//Energía: 1000 imp = 1 KWh -> 1 imp = 1 Wh; 
+//long Intervalo_calculo = 10; //Segundos entre cálculos (Recomendado + de 3 segundos)
+unsigned long Horas[] = {0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0}; //Matriz para guardar los pulsos según la hora
+long millisAnt = 0; //Milisegundos para comprobar tiempo pasado
+float millisPrevious=0; //Para saber el tiempo transcurrido desde el último pulso
+long millisEEPROM=0; //Salvado de Kwh consumidos en EEPROM
+long millisPant=0; //Guardamos tiempo de intervalo pantalla completa
+long millisRTC=0; //Actualizar reloj
+boolean Pulso = false; //Detectado pulso
+boolean NoPulso = false; //Detectado que no hubo pulso después de un pulso
+unsigned long PulsosDia =0; //Contador total KWh
+unsigned long PulsosNoche =0;
+long Vatios=0; //Cálculo vatios
+long VatiosAnt=0;
+long MaxVatios=0; //pico consumo vatios
+unsigned long TimeMax=0; //Ms con vatios >2300
+int pos =0; //para jugar con la EEPROM
+int value =0;
+
+void setup() {
+  Serial.begin(9600);
+
+//Descomentar las líneas siguientes para sincronizar tiempo por el Serial
+//  if(Serial.available()) 
+//  {
+//     time_t t = processSyncMessage();
+//     if(t >0)
+//     {
+//        RTC.set(t);   // set the RTC and the system time to the received value
+//        setTime(t);          
+//     }
+//  }
+//   digitalClockDisplay();  
+//   delay(1000);
+//}
+
+  //sync internal time to the RTC
+  setSyncProvider(RTC.get);   // the function to get the time from the RTC
+  Serial.println();
+  if(timeStatus()!= timeSet) 
+     Serial.println("Unable to sync with the RTC");
+  else
+     Serial.println("RTC has set the system time");
+  Wire.begin();
+  //RTC.begin();
+  //Si quitamos el comentario de la linea siguiente, se ajusta la hora y la fecha con la del ordenador
+  //RTC.adjust(DateTime(__DATE__, __TIME__));
+  Serial.println(F("TFT LCD test"));
+
+#ifdef USE_ADAFRUIT_SHIELD_PINOUT
+  Serial.println(F("Using Adafruit 2.8\" TFT Arduino Shield Pinout"));
+#else
+  Serial.println(F("Using Adafruit 2.8\" TFT Breakout Board Pinout"));
+#endif
+
+  Serial.print("TFT size is "); Serial.print(tft.width()); Serial.print("x"); Serial.println(tft.height());
+  Serial.println(F("Done!")); //Como info
+  
+  tft.reset(); //Reseteamos la pantalla
+
+  uint16_t identifier = tft.readID(); //Leemos el identificador de pantalla, en mi caso 9325
+
+  tft.begin(identifier); //Inicializamos la pantalla
+  tft.setRotation(1); //Girada la pantalla 90º para ponerla horizontal   
+  pinMode(PowerSensor, INPUT);
+  
+  //Cogemos los valores de pulsos salvados
+   for(int i=0; i<24; i++) {               
+     Horas[i]=EEPROMReadlong(i*4);
+      }
+   TimeMax=EEPROMReadlong(200);
+}
+
+void loop() {
+  //Descomentar las siguientes líneas cuando haya que borrar toda la eeprom
+  //for (int pos = 0; pos <1024; pos++) { 
+  //   EEPROM.write(pos, 0);
+  //}
+  //rellenamos de 0 los datos de EEPROM con los pulsos
+  //for(int i=0; i<24; i++) {               
+  //   EEPROMWritelong(i*4,0);
+  //    }
+  //EEPROMWritelong(200,0);
+  //while(1) {delay(500);} //bucle infinito para borrarlo sólo una vez
+
+  time_t t = now(); //Cogemos la hora
+  int sensorState = digitalRead(PowerSensor);
+  
+  if (sensorState == 0) //Hay pocos pulsos por segundo, y cada uno dura >=30 mseg; lo importante es "capturarlos"
+    {
+      if (Pulso) { //Si se detectó pulso previamente, se contabiliza y se muestra WATTS consumo en pantalla
+        //En esta operación tarda 29 ms en el Arduino UNO;
+        Pulso=false;
+        //Guardamos el pulso en la hora correspondiente
+        Horas[hour(t)-1]=Horas[hour(t)-1]+1;
+        //3600 segundos=1 KWh = 1000 pulsos 
+        //Sacamos los pulsos por segundo que hemos tenido y sacamos los W
+        Vatios=(1000/(millis()-millisPrevious))/(PulsosKW/3600)*1000; //Todas las variables utilizadas en el cálculo deben ser float para exactitud
+        if (MaxVatios<Vatios) {//Guardamos máximo
+          MaxVatios=Vatios; 
+        }
+        if (Vatios>=2300){//Guardamos el tiempo durante el cual los Vatios superan los 2300W (Tarifa social)
+          TimeMax=TimeMax+(millis()-millisPrevious);
+        }
+        millisPrevious=millis(); 
+        //Cada vez que hay un pulso se actualiza sólo los Vatios/hora para acelerar el dibujado; así sólo tarda 29 ms
+        tft.setCursor(120, 0);
+        tft.setTextColor(BLACK);  tft.setTextSize(3);
+        //tft.print("WATTS: ");
+        tft.print(VatiosAnt);
+        tft.print(" Wh");
+        tft.setCursor(120,0);
+        tft.setTextColor(YELLOW);
+        //tft.print("WATTS: ");
+        tft.print(Vatios);
+        tft.print(" Wh");
+        VatiosAnt=Vatios;  
+      }
+    }
+    else {
+      Pulso=true; //Se marca detectado pulso
+    }  
+ 
+  //Cada minuto y sólo cuando el consumo <1500W, actualizamos toda la pantalla; para evitar perder pulsos
+  //Hay que tener en cuenta que en esta rutina tarda 1,7 segundos el UNO; prefiero no refrescar la pantalla antes que perder pulsos
+  //A mi se me queda la pantalla en blanco cada cierto tiempo ¿? ni idea xq pasa, pero se arregla al refrescarse
+  if (millis()-millisPant >= 60000 && Pulso && Vatios<1500) 
+  {
+    millisPant=millis();
+    tft.reset(); //Reseteamos la pantalla
+    uint16_t identifier = tft.readID(); //Leemos el identificador de pantalla, en mi caso 9325
+    tft.begin(identifier); //Inicializamos la pantalla
+    tft.setRotation(1); //Girada la pantalla 90º para ponerla horizontal   
+    tft.fillScreen(BLACK); //Es muy lento
+    tft.setCursor(0, 0);
+    tft.setTextColor(YELLOW);  tft.setTextSize(3);
+    tft.print("WATTS:");
+    tft.setCursor(120, 0); //Establecemos posición escritura Watts
+    tft.print(Vatios);
+    VatiosAnt=Vatios;
+    tft.println(" Wh");
+    //Calculamos PulsosDia y Noche
+    //POR HACER: Cambiar el programa para que calcule consumo según horario verano teniendo en cuenta las fechas del reloj
+    //De momento sólo cuenta los pulsos según las horas y calcula KWh día y Noche
+    PulsosNoche=0; //Iniciar variables
+    PulsosDia=0;
+    for(int i=0; i<24; i++) { 
+      if (i>=21 && hour()<=11) { //A partir de las 22:00 hasta las 12:00 horario invierno
+      PulsosNoche=PulsosNoche+Horas[i];
+    }
+      else {
+      PulsosDia=PulsosDia+Horas[i];
+      }
+    }
+    //Mostramos total dia y noche
+    tft.setTextColor(YELLOW);
+    tft.print("TOTAL DIA: ");
+    tft.print(PulsosDia/1000);
+    tft.println(" KWh");
+    tft.print("TOT NOCHE: ");
+    tft.print(PulsosNoche/1000);
+    tft.println(" KWh");
+    tft.print("WATTS MAX: ");
+    tft.println(MaxVatios);
+    //Mostramos fecha y hora
+    tft.setTextColor(WHITE);
+    tft.setTextSize(2);
+    tft.print("Minutos>2300Wh: ");
+    tft.println(TimeMax/60000);
+    tft.setTextColor(GREEN);
+    tft.print(day(t));
+    tft.print(+ "/") ;
+    tft.print(month(t));
+    tft.print(+ "/") ;
+    tft.print(year(t)); 
+    tft.print( " ") ;
+    tft.print(hour(t));  
+    tft.print(+ ":") ;
+    tft.println(minute(t));
+    //tft.print(":") ;
+    //tft.println(second(t));
+    //Imprimimos en pantalla KW por cada hora para más info
+    tft.setTextColor(CYAN);
+    for(int i=0; i<24; i++) {               
+     tft.print(i+1); 
+     tft.print(":"); 
+     tft.print(Horas[i]/1000); 
+     tft.print(" ");
+     if (i==3 or i==7 or i==11 or i==15 or i==19 or i==23){
+      tft.println(); 
+       }
+     }
+     
+  }
+  
+  //Cada media hora salvamos a la EEPROM los datos que han cambiado (no hacerlo más frecuente para prevenir el envejecimiento prematuro de la FLASH)
+  if (millis()-millisAnt>=1800000) { 
+    for(int i=0; i<24; i++) {               
+     if (EEPROMReadlong(i*4)<Horas[i]) { //comprobamos si el valor ha cambiado; múltiplos de 4 para almacenar el valor
+        EEPROMWritelong(i*4,Horas[i]); //guardamos el valor de consumo diario
+       }
+      }
+     if (EEPROMReadlong(200)<TimeMax) { //Guardamos valor de tiempo en ms superando 2300W
+        EEPROMWritelong(200,TimeMax);
+       }
+        tft.setTextColor(GREEN);
+        tft.setTextSize(1);
+        tft.setCursor(0,230);
+        tft.print("Data saved ");
+        tft.print(day(t));
+        tft.print(+ "/") ;
+        tft.print(month(t));
+        tft.print(+ "/") ;
+        tft.print(year(t)); 
+        tft.print( " ") ;
+        tft.print(hour(t));  
+        tft.print(+ ":") ;
+        tft.println(minute(t));
+
+   }
+  
+  delay(20);
+}
+
+
+//RUTINAS
+//Lo siguiente sólo lo he dejado como referencia para usar líneas para gráficos
+unsigned long testLines(uint16_t color) {
+  unsigned long start, t;
+  int           x1, y1, x2, y2,
+                w = tft.width(),
+                h = tft.height();
+
+  tft.fillScreen(BLACK);
+
+  x1 = y1 = 0;
+  y2    = h - 1;
+  start = micros();
+  for(x2=0; x2<w; x2+=6) tft.drawLine(x1, y1, x2, y2, color);
+  x2    = w - 1;
+  for(y2=0; y2<h; y2+=6) tft.drawLine(x1, y1, x2, y2, color);
+  t     = micros() - start; // fillScreen doesn't count against timing
+
+  tft.fillScreen(BLACK);
+
+  x1    = w - 1;
+  y1    = 0;
+  y2    = h - 1;
+  start = micros();
+  for(x2=0; x2<w; x2+=6) tft.drawLine(x1, y1, x2, y2, color);
+  x2    = 0;
+  for(y2=0; y2<h; y2+=6) tft.drawLine(x1, y1, x2, y2, color);
+  t    += micros() - start;
+
+  tft.fillScreen(BLACK);
+
+  x1    = 0;
+  y1    = h - 1;
+  y2    = 0;
+  start = micros();
+  for(x2=0; x2<w; x2+=6) tft.drawLine(x1, y1, x2, y2, color);
+  x2    = w - 1;
+  for(y2=0; y2<h; y2+=6) tft.drawLine(x1, y1, x2, y2, color);
+  t    += micros() - start;
+
+  tft.fillScreen(BLACK);
+
+  x1    = w - 1;
+  y1    = h - 1;
+  y2    = 0;
+  start = micros();
+  for(x2=0; x2<w; x2+=6) tft.drawLine(x1, y1, x2, y2, color);
+  x2    = 0;
+  for(y2=0; y2<h; y2+=6) tft.drawLine(x1, y1, x2, y2, color);
+
+  return micros() - start;
+}
+
+unsigned long testFastLines(uint16_t color1, uint16_t color2) {
+  unsigned long start;
+  int           x, y, w = tft.width(), h = tft.height();
+
+  tft.fillScreen(BLACK);
+  start = micros();
+  for(y=0; y<h; y+=5) tft.drawFastHLine(0, y, w, color1);
+  for(x=0; x<w; x+=5) tft.drawFastVLine(x, 0, h, color2);
+
+  return micros() - start;
+}
+
+//This function will write a 4 byte (32bit) long to the eeprom at
+//the specified address to address + 3.
+void EEPROMWritelong(int address, long value)
+      {
+      //Decomposition from a long to 4 bytes by using bitshift.
+      //One = Most significant -> Four = Least significant byte
+      byte four = (value & 0xFF);
+      byte three = ((value >> 8) & 0xFF);
+      byte two = ((value >> 16) & 0xFF);
+      byte one = ((value >> 24) & 0xFF);
+
+      //Write the 4 bytes into the eeprom memory.
+      EEPROM.write(address, four);
+      EEPROM.write(address + 1, three);
+      EEPROM.write(address + 2, two);
+      EEPROM.write(address + 3, one);
+      }
+      
+long EEPROMReadlong(long address)
+      {
+      //Read the 4 bytes from the eeprom memory.
+      long four = EEPROM.read(address);
+      long three = EEPROM.read(address + 1);
+      long two = EEPROM.read(address + 2);
+      long one = EEPROM.read(address + 3);
+
+      //Return the recomposed long by using bitshift.
+      return ((four << 0) & 0xFF) + ((three << 8) & 0xFFFF) + ((two << 16) & 0xFFFFFF) + ((one << 24) & 0xFFFFFFFF);
+      }
