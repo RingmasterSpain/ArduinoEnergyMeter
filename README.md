@@ -1,5 +1,4 @@
 # ArduinoEnergyMeter
-Mis programillas de Arduino
 
 El objetivo de este programa es controlar 
 - un Arduino Uno R3 (o copia china) con Atmega328P y una pantalla TFT LCD de 2,4" o similar.
