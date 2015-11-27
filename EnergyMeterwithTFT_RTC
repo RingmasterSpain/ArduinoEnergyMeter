@@ -1,11 +1,11 @@
 /*
- * ARCHIVO: Monitorización DDS238-1
+ * ARCHIVO: MonitorizaciÃ³n DDS238-1
  *   AUTOR: David Losada
  *   FECHA: 25/11/2015
  *     URL: http://miqueridopinwino.blogspot.com
  *
  * OBJETIVO: Prototipo para comprobar consumos s/horarios
- * Cálculo TDH en invierno; en verano es 13 a 23h http://nergiza.com/tarifa-nocturna-sigue-existiendo-es-rentable/
+ * CÃ¡lculo TDH en invierno; en verano es 13 a 23h http://nergiza.com/tarifa-nocturna-sigue-existiendo-es-rentable/
  *
  * Este medidor de KWh da un pulso cada Vatio/h.
  *
@@ -65,32 +65,34 @@ Adafruit_TFTLCD tft(LCD_CS, LCD_CD, LCD_WR, LCD_RD, LCD_RESET);
 // Adafruit_TFTLCD tft;
 
 int PowerSensor = 0; //pin de entrada de pulsos medidor eléctrico
+int Consigna=2300; //Vatios sobre los que queremos controlar los minutos en los que lo superamos para saber si merece la pena la bajada de potencia
 float PulsosKW = 1000; //IMPORTANTE DEFINIR AQUÍ los que correspondan a tu aparato; pulsos por KW
 //(Con un sensor de 1000 máximo vamos a tener 5 pulsos/seg. para un consumo de 5.000W)
-//Es decir, van a pasar mínimo 170 milisegundos entre pulsos (200-30 que dura)
+//Es decir, van a pasar máximo 170 milisegundos entre pulsos (200-30 que dura)
 //Energía: 1000 imp = 1 KWh -> 1 imp = 1 Wh; 
 //long Intervalo_calculo = 10; //Segundos entre cálculos (Recomendado + de 3 segundos)
 unsigned long Horas[] = {0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0}; //Matriz para guardar los pulsos según la hora
 long millisAnt = 0; //Milisegundos para comprobar tiempo pasado
-float millisPrevious=0; //Para saber el tiempo transcurrido desde el último pulso
+long millisPrevious=0; //Para saber el tiempo transcurrido desde el último pulso
+float Tiempo_Trans=0; //Guardamos los ms entre cada pulso detectado
 long millisEEPROM=0; //Salvado de Kwh consumidos en EEPROM
 long millisPant=0; //Guardamos tiempo de intervalo pantalla completa
 long millisRTC=0; //Actualizar reloj
 boolean Pulso = false; //Detectado pulso
-boolean NoPulso = false; //Detectado que no hubo pulso después de un pulso
+boolean NoPulso = false; //Detectado que no hubo pulso despuÃ©s de un pulso
 unsigned long PulsosDia =0; //Contador total KWh
 unsigned long PulsosNoche =0;
 long Vatios=0; //Cálculo vatios
 long VatiosAnt=0;
 long MaxVatios=0; //pico consumo vatios
 unsigned long TimeMax=0; //Ms con vatios >2300
-int pos =0; //para jugar con la EEPROM
-int value =0;
+long TimePrevious=0; //Control de tiempo de dibujado de pantalla
+long TimeFinal=0;
 
 void setup() {
   Serial.begin(9600);
 
-//Descomentar las líneas siguientes para sincronizar tiempo por el Serial
+//Descomentar las lÃ­neas siguientes para sincronizar tiempo por el Serial
 //  if(Serial.available()) 
 //  {
 //     time_t t = processSyncMessage();
@@ -115,7 +117,7 @@ void setup() {
   //RTC.begin();
   //Si quitamos el comentario de la linea siguiente, se ajusta la hora y la fecha con la del ordenador
   //RTC.adjust(DateTime(__DATE__, __TIME__));
-  Serial.println(F("TFT LCD test"));
+  Serial.println(F("Arduino Working OK"));
 
 #ifdef USE_ADAFRUIT_SHIELD_PINOUT
   Serial.println(F("Using Adafruit 2.8\" TFT Arduino Shield Pinout"));
@@ -124,14 +126,11 @@ void setup() {
 #endif
 
   Serial.print("TFT size is "); Serial.print(tft.width()); Serial.print("x"); Serial.println(tft.height());
-  Serial.println(F("Done!")); //Como info
   
   tft.reset(); //Reseteamos la pantalla
-
-  uint16_t identifier = tft.readID(); //Leemos el identificador de pantalla, en mi caso 9325
-
+  uint16_t identifier = tft.readID(); //Leemos el identificador de pantalla, en mi caso 0x9325
   tft.begin(identifier); //Inicializamos la pantalla
-  tft.setRotation(1); //Girada la pantalla 90º para ponerla horizontal   
+  tft.setRotation(1); //Girada la pantalla 90Âº para ponerla horizontal  
   pinMode(PowerSensor, INPUT);
   
   //Cogemos los valores de pulsos salvados
@@ -139,41 +138,42 @@ void setup() {
      Horas[i]=EEPROMReadlong(i*4);
       }
    TimeMax=EEPROMReadlong(200);
+   MaxVatios=EEPROMReadlong(204);
 }
 
 void loop() {
-  //Descomentar las siguientes líneas cuando haya que borrar toda la eeprom
-  //for (int pos = 0; pos <1024; pos++) { 
-  //   EEPROM.write(pos, 0);
-  //}
+  //Descomentar las siguientes lÃ­neas para resetear la la eeprom que se usa en el programa
   //rellenamos de 0 los datos de EEPROM con los pulsos
   //for(int i=0; i<24; i++) {               
   //   EEPROMWritelong(i*4,0);
   //    }
   //EEPROMWritelong(200,0);
-  //while(1) {delay(500);} //bucle infinito para borrarlo sólo una vez
+  //EEPROMWritelong(204,0);
+  //Serial.println("Borrado de EEPROM terminado");
+  //while(1) {delay(500);} //bucle infinito para borrarlo sÃ³lo una vez
 
   time_t t = now(); //Cogemos la hora
   int sensorState = digitalRead(PowerSensor);
   
   if (sensorState == 0) //Hay pocos pulsos por segundo, y cada uno dura >=30 mseg; lo importante es "capturarlos"
     {
-      if (Pulso) { //Si se detectó pulso previamente, se contabiliza y se muestra WATTS consumo en pantalla
-        //En esta operación tarda 29 ms en el Arduino UNO;
+      if (Pulso) { //Si se detectÃ³ pulso previamente, se contabiliza y se muestra WATTS consumo en pantalla
+        //En esta operaciÃ³n tarda 29 ms en el Arduino UNO;
+        Tiempo_Trans=millis()-millisPrevious;
+        millisPrevious=millis();
         Pulso=false;
         //Guardamos el pulso en la hora correspondiente
-        Horas[hour(t)-1]=Horas[hour(t)-1]+1;
+        Horas[hour(t)]=Horas[hour(t)]+1;
         //3600 segundos=1 KWh = 1000 pulsos 
         //Sacamos los pulsos por segundo que hemos tenido y sacamos los W
-        Vatios=(1000/(millis()-millisPrevious))/(PulsosKW/3600)*1000; //Todas las variables utilizadas en el cálculo deben ser float para exactitud
-        if (MaxVatios<Vatios) {//Guardamos máximo
+        Vatios=((3600/PulsosKW)/(Tiempo_Trans/1000))*1000; //Todas las variables utilizadas en el cÃ¡lculo deben ser float para exactitud
+        if (MaxVatios<Vatios) {//Guardamos mÃ¡ximo
           MaxVatios=Vatios; 
         }
-        if (Vatios>=2300){//Guardamos el tiempo durante el cual los Vatios superan los 2300W (Tarifa social)
-          TimeMax=TimeMax+(millis()-millisPrevious);
-        }
-        millisPrevious=millis(); 
-        //Cada vez que hay un pulso se actualiza sólo los Vatios/hora para acelerar el dibujado; así sólo tarda 29 ms
+        if (Vatios>=Consigna){//Guardamos el tiempo durante el cual los Vatios superan los vatios que queremos controlar (bajada de potencia)
+          TimeMax=TimeMax+(Tiempo_Trans);
+        } 
+        //Cada vez que hay un pulso se actualiza sÃ³lo los Vatios/hora para acelerar el dibujado; asÃ­ sÃ³lo tarda 29 ms
         tft.setCursor(120, 0);
         tft.setTextColor(BLACK);  tft.setTextSize(3);
         //tft.print("WATTS: ");
@@ -191,31 +191,37 @@ void loop() {
       Pulso=true; //Se marca detectado pulso
     }  
  
-  //Cada minuto y sólo cuando el consumo <1500W, actualizamos toda la pantalla; para evitar perder pulsos
-  //Hay que tener en cuenta que en esta rutina tarda 1,7 segundos el UNO; prefiero no refrescar la pantalla antes que perder pulsos
+  //Refrescamos pantalla cada minuto pero sólo cuando hay pulsos cada 2 segundos o más, para evitar perder pulsos
+  //Hay que tener en cuenta que escribir todo esto tarda 1,7 segundos en el UNO; prefiero no refrescar la pantalla antes que perder pulsos
+  //He añadido contadores de tiempo para sacar el valor de la vez anterior y si el tiempo entre pulsos>tiempo que tarda en refrescar pantalla->refresca
   //A mi se me queda la pantalla en blanco cada cierto tiempo ¿? ni idea xq pasa, pero se arregla al refrescarse
-  if (millis()-millisPant >= 60000 && Pulso && Vatios<1500) 
+  //También escribimos datos si acaba de encenderse (millis se resetea cada 50 días)
+  //Y si no se cumple nada de eso, actualizar al menos cada 2 horas aunque perdamos algún pulso
+  if (millis()-millisPant >= 60000 && Pulso && (Tiempo_Trans>TimeFinal-TimePrevious) or millis()<2000 or (millis()-millisPant) >=7200000) 
   {
+    TimePrevious=millis();//Comienzo contador tiempo  
     millisPant=millis();
     tft.reset(); //Reseteamos la pantalla
     uint16_t identifier = tft.readID(); //Leemos el identificador de pantalla, en mi caso 9325
+    Serial.print("Display ID: ");
+    Serial.println(identifier);
     tft.begin(identifier); //Inicializamos la pantalla
-    tft.setRotation(1); //Girada la pantalla 90º para ponerla horizontal   
+    tft.setRotation(1); //Girada la pantalla 90Âº para ponerla horizontal   
     tft.fillScreen(BLACK); //Es muy lento
     tft.setCursor(0, 0);
     tft.setTextColor(YELLOW);  tft.setTextSize(3);
     tft.print("WATTS:");
-    tft.setCursor(120, 0); //Establecemos posición escritura Watts
+    tft.setCursor(120, 0); //Establecemos posiciÃ³n escritura Watts
     tft.print(Vatios);
     VatiosAnt=Vatios;
     tft.println(" Wh");
     //Calculamos PulsosDia y Noche
-    //POR HACER: Cambiar el programa para que calcule consumo según horario verano teniendo en cuenta las fechas del reloj
-    //De momento sólo cuenta los pulsos según las horas y calcula KWh día y Noche
+    //POR HACER: Cambiar el programa para que calcule consumo segÃºn horario verano teniendo en cuenta las fechas del reloj
+    //De momento sÃ³lo cuenta los pulsos segÃºn las horas y calcula KWh dÃ­a y Noche
     PulsosNoche=0; //Iniciar variables
     PulsosDia=0;
     for(int i=0; i<24; i++) { 
-      if (i>=21 && hour()<=11) { //A partir de las 22:00 hasta las 12:00 horario invierno
+      if (i>21 or i<12) { //A partir de las 22:00 hasta las 12:00 horario invierno
       PulsosNoche=PulsosNoche+Horas[i];
     }
       else {
@@ -223,20 +229,32 @@ void loop() {
       }
     }
     //Mostramos total dia y noche
-    tft.setTextColor(YELLOW);
+    tft.setTextColor(MAGENTA);
+    tft.print("WATTS MAX: ");
+    tft.println(MaxVatios);    
     tft.print("TOTAL DIA: ");
-    tft.print(PulsosDia/1000);
+    tft.print(PulsosDia/PulsosKW,1);//Indicamos Kw diarios con 1 decimal
     tft.println(" KWh");
     tft.print("TOT NOCHE: ");
-    tft.print(PulsosNoche/1000);
+    tft.print(PulsosNoche/PulsosKW,1);
     tft.println(" KWh");
-    tft.print("WATTS MAX: ");
-    tft.println(MaxVatios);
-    //Mostramos fecha y hora
+    //Mostramos minutos durante los que se ha superado la consigna
     tft.setTextColor(WHITE);
     tft.setTextSize(2);
     tft.print("Minutos>2300Wh: ");
-    tft.println(TimeMax/60000);
+    tft.println(TimeMax/60000.1);//Con 1 decimal
+    //Imprimimos en pantalla KW por cada hora para mÃ¡s info
+    tft.setTextColor(CYAN);
+    for(int i=0; i<24; i++) {               
+     tft.print(i); 
+     tft.print(":"); 
+     tft.print(Horas[i]/PulsosKW,1); 
+     tft.print(" ");
+     if (i==3 or i==7 or i==11 or i==15 or i==19 or i==23){
+      tft.println(); 
+       }
+     }
+    //Mostramos fecha y hora
     tft.setTextColor(GREEN);
     tft.print(day(t));
     tft.print(+ "/") ;
@@ -249,43 +267,35 @@ void loop() {
     tft.println(minute(t));
     //tft.print(":") ;
     //tft.println(second(t));
-    //Imprimimos en pantalla KW por cada hora para más info
-    tft.setTextColor(CYAN);
-    for(int i=0; i<24; i++) {               
-     tft.print(i+1); 
-     tft.print(":"); 
-     tft.print(Horas[i]/1000); 
-     tft.print(" ");
-     if (i==3 or i==7 or i==11 or i==15 or i==19 or i==23){
-      tft.println(); 
-       }
-     }
-     
+    TimeFinal=millis(); //Final contador tiempo
   }
   
-  //Cada media hora salvamos a la EEPROM los datos que han cambiado (no hacerlo más frecuente para prevenir el envejecimiento prematuro de la FLASH)
+  //Cada media hora salvamos a la EEPROM los datos que han cambiado (no hacerlo mÃ¡s frecuente para prevenir el envejecimiento prematuro de la FLASH)
   if (millis()-millisAnt>=1800000) { 
     for(int i=0; i<24; i++) {               
-     if (EEPROMReadlong(i*4)<Horas[i]) { //comprobamos si el valor ha cambiado; múltiplos de 4 para almacenar el valor
+     if (EEPROMReadlong(i*4)!=Horas[i]) { //comprobamos si el valor ha cambiado; mÃºltiplos de 4 para almacenar el valor
         EEPROMWritelong(i*4,Horas[i]); //guardamos el valor de consumo diario
        }
       }
-     if (EEPROMReadlong(200)<TimeMax) { //Guardamos valor de tiempo en ms superando 2300W
+     if (EEPROMReadlong(200)!=TimeMax) { //Guardamos valor de tiempo en ms superando 2300W
         EEPROMWritelong(200,TimeMax);
        }
-        tft.setTextColor(GREEN);
-        tft.setTextSize(1);
-        tft.setCursor(0,230);
-        tft.print("Data saved ");
-        tft.print(day(t));
-        tft.print(+ "/") ;
-        tft.print(month(t));
-        tft.print(+ "/") ;
-        tft.print(year(t)); 
-        tft.print( " ") ;
-        tft.print(hour(t));  
-        tft.print(+ ":") ;
-        tft.println(minute(t));
+     if (EEPROMReadlong(204)!=MaxVatios) { //Guardamos valor de vatios máximo
+        EEPROMWritelong(204,MaxVatios);
+       }
+     tft.setTextColor(GREEN);
+     tft.setTextSize(1);
+     tft.setCursor(0,230);
+     tft.print("Data saved ");
+     tft.print(day(t));
+     tft.print(+ "/") ;
+     tft.print(month(t));
+     tft.print(+ "/") ;
+     tft.print(year(t)); 
+     tft.print( " ") ;
+     tft.print(hour(t));  
+     tft.print(+ ":") ;
+     tft.println(minute(t));
 
    }
   
@@ -294,7 +304,8 @@ void loop() {
 
 
 //RUTINAS
-//Lo siguiente sólo lo he dejado como referencia para usar líneas para gráficos
+//Lo siguiente sólo lo he dejado como referencia si necesito hacer algún gráfico de uso
+//Se pueden borrar sin problema para liberar espacio
 unsigned long testLines(uint16_t color) {
   unsigned long start, t;
   int           x1, y1, x2, y2,
