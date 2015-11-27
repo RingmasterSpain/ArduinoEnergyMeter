@@ -1,13 +1,14 @@
 /*
- * ARCHIVO: MonitorizaciÃ³n DDS238-1
+ * ARCHIVO: Monitorización DDS238-1
  *   AUTOR: David Losada
  *   FECHA: 25/11/2015
- *     URL: http://miqueridopinwino.blogspot.com
+  *        URL: http://miqueridopinwino.blogspot.com/monta-tu-propio-monitor-de-energia-por-30-eurillos.html
  *
  * OBJETIVO: Prototipo para comprobar consumos s/horarios
- * CÃ¡lculo TDH en invierno; en verano es 13 a 23h http://nergiza.com/tarifa-nocturna-sigue-existiendo-es-rentable/
- *
- * Este medidor de KWh da un pulso cada Vatio/h.
+ * Cálculo TDH en invierno; en verano es 13 a 23h http://nergiza.com/tarifa-nocturna-sigue-existiendo-es-rentable/
+ * TODO: Tener en cuenta si es verano o invierno (configurado para invierno)
+ * Configurado para el medidor de KWh DDS238-1: Da un pulso cada Vatio/h (1000 pulsos/KWh)
+ * (Cambiar las variables del inicio para que funcione con el que uses).
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -126,11 +127,31 @@ void setup() {
 #endif
 
   Serial.print("TFT size is "); Serial.print(tft.width()); Serial.print("x"); Serial.println(tft.height());
+  tft.reset();
+
+  uint16_t identifier = tft.readID();
+
+  //Mandamos por el serial el ID por si hubiera algún problema con la pantalla
+  if(identifier == 0x9325) { 
+    Serial.println(F("Found ILI9325 LCD driver"));
+  } else if(identifier == 0x9327) {
+    Serial.println(F("Found ILI9327 LCD driver"));
+  } else if(identifier == 0x9328) {
+    Serial.println(F("Found ILI9328 LCD driver"));
+  } else if(identifier == 0x7575) {
+    Serial.println(F("Found HX8347G LCD driver"));
+  } else if(identifier == 0x9341) {
+    Serial.println(F("Found ILI9341 LCD driver"));
+  } else if(identifier == 0x8357) {
+    Serial.println(F("Found HX8357D LCD driver"));
+  } else if(identifier == 0x0154) {
+    Serial.println(F("Found S6D0154 LCD driver"));
+  } else {
+    Serial.print(F("Unknown LCD driver chip: "));
+    Serial.println(identifier, HEX);
+  }
+  tft.begin(identifier);
   
-  tft.reset(); //Reseteamos la pantalla
-  uint16_t identifier = tft.readID(); //Leemos el identificador de pantalla, en mi caso 0x9325
-  tft.begin(identifier); //Inicializamos la pantalla
-  tft.setRotation(1); //Girada la pantalla 90Âº para ponerla horizontal  
   pinMode(PowerSensor, INPUT);
   
   //Cogemos los valores de pulsos salvados
@@ -176,14 +197,12 @@ void loop() {
         //Cada vez que hay un pulso se actualiza sÃ³lo los Vatios/hora para acelerar el dibujado; asÃ­ sÃ³lo tarda 29 ms
         tft.setCursor(120, 0);
         tft.setTextColor(BLACK);  tft.setTextSize(3);
-        //tft.print("WATTS: ");
         tft.print(VatiosAnt);
-        tft.print(" Wh");
+        tft.print(" W");
         tft.setCursor(120,0);
         tft.setTextColor(YELLOW);
-        //tft.print("WATTS: ");
         tft.print(Vatios);
-        tft.print(" Wh");
+        tft.print(" W");
         VatiosAnt=Vatios;  
       }
     }
@@ -201,7 +220,7 @@ void loop() {
   {
     TimePrevious=millis();//Comienzo contador tiempo  
     millisPant=millis();
-    tft.reset(); //Reseteamos la pantalla
+    tft.reset(); //Reseteamos la pantalla; lo hago cada minuto porque a veces se me quedaba en blanco
     uint16_t identifier = tft.readID(); //Leemos el identificador de pantalla, en mi caso 9325
     Serial.print("Display ID: ");
     Serial.println(identifier);
@@ -214,7 +233,7 @@ void loop() {
     tft.setCursor(120, 0); //Establecemos posiciÃ³n escritura Watts
     tft.print(Vatios);
     VatiosAnt=Vatios;
-    tft.println(" Wh");
+    tft.println(" W");
     //Calculamos PulsosDia y Noche
     //POR HACER: Cambiar el programa para que calcule consumo segÃºn horario verano teniendo en cuenta las fechas del reloj
     //De momento sÃ³lo cuenta los pulsos segÃºn las horas y calcula KWh dÃ­a y Noche
@@ -301,100 +320,3 @@ void loop() {
   
   delay(20);
 }
-
-
-//RUTINAS
-//Lo siguiente sólo lo he dejado como referencia si necesito hacer algún gráfico de uso
-//Se pueden borrar sin problema para liberar espacio
-unsigned long testLines(uint16_t color) {
-  unsigned long start, t;
-  int           x1, y1, x2, y2,
-                w = tft.width(),
-                h = tft.height();
-
-  tft.fillScreen(BLACK);
-
-  x1 = y1 = 0;
-  y2    = h - 1;
-  start = micros();
-  for(x2=0; x2<w; x2+=6) tft.drawLine(x1, y1, x2, y2, color);
-  x2    = w - 1;
-  for(y2=0; y2<h; y2+=6) tft.drawLine(x1, y1, x2, y2, color);
-  t     = micros() - start; // fillScreen doesn't count against timing
-
-  tft.fillScreen(BLACK);
-
-  x1    = w - 1;
-  y1    = 0;
-  y2    = h - 1;
-  start = micros();
-  for(x2=0; x2<w; x2+=6) tft.drawLine(x1, y1, x2, y2, color);
-  x2    = 0;
-  for(y2=0; y2<h; y2+=6) tft.drawLine(x1, y1, x2, y2, color);
-  t    += micros() - start;
-
-  tft.fillScreen(BLACK);
-
-  x1    = 0;
-  y1    = h - 1;
-  y2    = 0;
-  start = micros();
-  for(x2=0; x2<w; x2+=6) tft.drawLine(x1, y1, x2, y2, color);
-  x2    = w - 1;
-  for(y2=0; y2<h; y2+=6) tft.drawLine(x1, y1, x2, y2, color);
-  t    += micros() - start;
-
-  tft.fillScreen(BLACK);
-
-  x1    = w - 1;
-  y1    = h - 1;
-  y2    = 0;
-  start = micros();
-  for(x2=0; x2<w; x2+=6) tft.drawLine(x1, y1, x2, y2, color);
-  x2    = 0;
-  for(y2=0; y2<h; y2+=6) tft.drawLine(x1, y1, x2, y2, color);
-
-  return micros() - start;
-}
-
-unsigned long testFastLines(uint16_t color1, uint16_t color2) {
-  unsigned long start;
-  int           x, y, w = tft.width(), h = tft.height();
-
-  tft.fillScreen(BLACK);
-  start = micros();
-  for(y=0; y<h; y+=5) tft.drawFastHLine(0, y, w, color1);
-  for(x=0; x<w; x+=5) tft.drawFastVLine(x, 0, h, color2);
-
-  return micros() - start;
-}
-
-//This function will write a 4 byte (32bit) long to the eeprom at
-//the specified address to address + 3.
-void EEPROMWritelong(int address, long value)
-      {
-      //Decomposition from a long to 4 bytes by using bitshift.
-      //One = Most significant -> Four = Least significant byte
-      byte four = (value & 0xFF);
-      byte three = ((value >> 8) & 0xFF);
-      byte two = ((value >> 16) & 0xFF);
-      byte one = ((value >> 24) & 0xFF);
-
-      //Write the 4 bytes into the eeprom memory.
-      EEPROM.write(address, four);
-      EEPROM.write(address + 1, three);
-      EEPROM.write(address + 2, two);
-      EEPROM.write(address + 3, one);
-      }
-      
-long EEPROMReadlong(long address)
-      {
-      //Read the 4 bytes from the eeprom memory.
-      long four = EEPROM.read(address);
-      long three = EEPROM.read(address + 1);
-      long two = EEPROM.read(address + 2);
-      long one = EEPROM.read(address + 3);
-
-      //Return the recomposed long by using bitshift.
-      return ((four << 0) & 0xFF) + ((three << 8) & 0xFFFF) + ((two << 16) & 0xFFFFFF) + ((one << 24) & 0xFFFFFFFF);
-      }
