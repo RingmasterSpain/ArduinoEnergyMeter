@@ -68,15 +68,13 @@ Adafruit_TFTLCD tft(LCD_CS, LCD_CD, LCD_WR, LCD_RD, LCD_RESET);
 int PowerSensor = 0; //pin de entrada de pulsos medidor eléctrico
 int Consigna=2300; //Vatios sobre los que queremos controlar los minutos en los que lo superamos para saber si merece la pena la bajada de potencia
 float PulsosKW = 1000; //IMPORTANTE DEFINIR AQUÍ los que correspondan a tu aparato; pulsos por KW
-//(Con un sensor de 1000 máximo vamos a tener 5 pulsos/seg. para un consumo de 5.000W)
-//Es decir, van a pasar máximo 170 milisegundos entre pulsos (200-30 que dura)
+//(Con un sensor de 1000 máximo vamos a tener 1,3 pulsos/seg. para un consumo de 5 KW)
+//Es decir, van a pasar máximo 1,33 seg. entre pulsos (1,3+0,03 que dura)
 //Energía: 1000 imp = 1 KWh -> 1 imp = 1 Wh; 
-//long Intervalo_calculo = 10; //Segundos entre cálculos (Recomendado + de 3 segundos)
 unsigned long Horas[] = {0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0}; //Matriz para guardar los pulsos según la hora
-long millisAnt = 0; //Milisegundos para comprobar tiempo pasado
 long millisPrevious=0; //Para saber el tiempo transcurrido desde el último pulso
 float Tiempo_Trans=0; //Guardamos los ms entre cada pulso detectado
-long millisEEPROM=0; //Salvado de Kwh consumidos en EEPROM
+long millisEEPROM=0; //Control Tiempo para salvado a EEPROM
 long millisPant=0; //Guardamos tiempo de intervalo pantalla completa
 long millisRTC=0; //Actualizar reloj
 boolean Pulso = false; //Detectado pulso
@@ -86,7 +84,7 @@ unsigned long PulsosNoche =0;
 long Vatios=0; //Cálculo vatios
 long VatiosAnt=0;
 long MaxVatios=0; //pico consumo vatios
-unsigned long TimeMax=0; //Ms con vatios >2300
+unsigned long TimeMax=0; //Ms con vatios >Consigna
 long TimePrevious=0; //Control de tiempo de dibujado de pantalla
 long TimeFinal=0;
 
@@ -290,7 +288,7 @@ void loop() {
   }
   
   //Cada media hora salvamos a la EEPROM los datos que han cambiado (no hacerlo mÃ¡s frecuente para prevenir el envejecimiento prematuro de la FLASH)
-  if (millis()-millisAnt>=1800000) { 
+  if (millis()-millisEEPROM>=1800000) { 
     for(int i=0; i<24; i++) {               
      if (EEPROMReadlong(i*4)!=Horas[i]) { //comprobamos si el valor ha cambiado; mÃºltiplos de 4 para almacenar el valor
         EEPROMWritelong(i*4,Horas[i]); //guardamos el valor de consumo diario
@@ -320,6 +318,7 @@ void loop() {
   
   delay(20);
 }
+
 //RUTINAS
 //This function will write a 4 byte (32bit) long to the eeprom at
 //the specified address to address + 3.
